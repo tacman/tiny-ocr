@@ -1,0 +1,17 @@
+{
+  "name": "@tacman1123/tiny-ocr",
+  "version": "0.1.0",
+  "description": "In-browser OCR with PP-OCRv6 Tiny via onnxruntime-web: a cheap probe() to ask 'is there readable text?' and a read() for the full result, shaped like imagor's ocr metadata.",
+  "type": "module",
+  "main": "src/index.js",
+  "module": "src/index.js",
+  "exports": { ".": "./src/index.js" },
+  "files": ["src", "models/SHA256SUMS", "README.md", "LICENSE"],
+  "sideEffects": false,
+  "scripts": { "test": "node test/pipeline.test.mjs" },
+  "peerDependencies": { "onnxruntime-web": "^1.22.0" },
+  "devDependencies": { "@napi-rs/canvas": "^0.1.0", "onnxruntime-node": "1.22.0" },
+  "repository": { "type": "git", "url": "git+https://github.com/tacman/tiny-ocr.git" },
+  "keywords": ["ocr", "onnx", "paddleocr", "browser", "camera"],
+  "license": "MIT"
+}

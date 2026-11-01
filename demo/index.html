@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tiny-ocr demo</title>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.min.js"></script>
+<style>
+  :root { --bg:#fff; --fg:#1b1f24; --muted:#667; --line:#d6dae0; --accent:#0b6bcb; --ok:#1a7f37; --no:#cf222e; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14171a; --fg:#e6e8eb; --muted:#9aa3ad; --line:#2d333a; --accent:#58a6ff; --ok:#3fb950; --no:#ff7b72; } }
+  * { box-sizing:border-box }
+  body { margin:0; padding:16px; background:var(--bg); color:var(--fg); font:15px/1.45 system-ui,sans-serif; max-width:720px; margin-inline:auto }
+  h1 { font-size:20px; margin:0 0 4px } .sub,#status { color:var(--muted); font-size:13px }
+  .stage { position:relative; margin:12px 0; background:#000; border-radius:8px; overflow:hidden; min-height:120px }
+  [hidden] { display:none !important }
+  video, #view { display:block; width:100%; height:auto }
+  #overlay { position:absolute; inset:0; width:100%; height:100% }
+  #badge { position:absolute; left:8px; top:8px; padding:3px 10px; border-radius:99px; font-size:13px; font-weight:600; color:#fff; background:var(--no) }
+  #badge.ok { background:var(--ok) }
+  button, label.btn { background:var(--accent); color:#fff; border:0; border-radius:6px; padding:8px 14px; cursor:pointer; font:inherit; display:inline-block }
+  button:disabled { opacity:.5 } input[type=file] { display:none }
+  pre { border:1px solid var(--line); border-radius:6px; padding:10px; white-space:pre-wrap; overflow:auto }
+</style>
+</head>
+<body>
+<h1>tiny-ocr</h1>
+<p class="sub">Live “is there readable text?” gate, then a full read. Runs on-device.</p>
+<div style="display:flex; gap:8px; flex-wrap:wrap">
+  <button id="live" disabled>Start camera</button>
+  <button id="snap" disabled>Read this frame</button>
+  <label class="btn">Take picture <input type="file" id="shot" accept="image/*" capture="environment"></label>
+</div>
+<div id="status">Loading models…</div>
+<div class="stage" id="stage"><video id="video" playsinline muted hidden></video><canvas id="view" hidden></canvas><canvas id="overlay"></canvas><span id="badge" hidden></span></div>
+<pre id="out">—</pre>
+
+<script type="module">
+import { createTinyOcr } from '../src/index.js';
+const $ = id => document.getElementById(id);
+const video = $('video'), view = $('view'), overlay = $('overlay'), badge = $('badge');
+let ocr, stream = null, running = false, passes = 0;
+const NEED = 3; // consecutive passing probes before the gate says "good"
+
+try {
+  ocr = await createTinyOcr({ modelBase: '../models/' });
+  $('status').textContent = 'Ready.'; $('live').disabled = false;
+} catch (e) { $('status').textContent = 'Model load failed: ' + e.message; throw e; }
+
+function paint(boxes, w, h, good) {
+  overlay.width = w; overlay.height = h;
+  const g = overlay.getContext('2d'); g.clearRect(0, 0, w, h);
+  g.lineWidth = Math.max(2, w / 300); g.strokeStyle = good ? '#3fb950' : '#ff7b72';
+  for (const b of boxes) g.strokeRect(b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0);
+}
+function setBadge(text, ok) { badge.hidden = false; badge.textContent = text; badge.classList.toggle('ok', ok); }
+
+async function loop() {
+  while (running) {
+    if (video.readyState >= 2) {
+      const p = await ocr.probe(video);
+      passes = p.hasText ? passes + 1 : 0;
+      const good = passes >= NEED;
+      paint(p.boxes, p.width, p.height, good);
+      setBadge(good ? `text found (${p.count})` : p.hasText ? 'hold steady…' : 'no text', good);
+      $('status').textContent = `probe ${p.ms.toFixed(0)} ms · ${p.count} boxes · coverage ${(p.coverage * 100).toFixed(1)}% · sharpness ${p.sharpness.toFixed(0)}`;
+      $('snap').disabled = false;
+    }
+    await new Promise(r => video.requestVideoFrameCallback ? video.requestVideoFrameCallback(r) : setTimeout(r, 200));
+    await new Promise(r => setTimeout(r, 150)); // cap around 5 probes/s
+  }
+}
+
+$('live').onclick = async () => {
+  if (running) { running = false; stream?.getTracks().forEach(t => t.stop()); video.hidden = true; $('live').textContent = 'Start camera'; return; }
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 } }, audio: false });
+  } catch (e) { $('status').textContent = 'Camera unavailable (needs HTTPS or localhost): ' + e.message; return; }
+  video.srcObject = stream; await video.play(); video.hidden = false; view.hidden = true;
+  running = true; passes = 0; $('live').textContent = 'Stop camera'; loop();
+};
+
+async function readAndShow(source) {
+  $('status').textContent = 'Reading…'; $('out').textContent = '…';
+  const r = await ocr.read(source);
+  $('out').textContent = `${r.text}\n\n— score ${r.text_score.toFixed(2)} · ${r.char_count} chars · ${r.timing.total_ms.toFixed(0)} ms`;
+  $('status').textContent = 'Done.';
+}
+$('snap').onclick = () => readAndShow(video);
+
+$('shot').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  const bmp = await createImageBitmap(f, { imageOrientation: 'from-image' });
+  running = false; video.hidden = true; view.hidden = false; view.width = bmp.width; view.height = bmp.height;
+  view.getContext('2d').drawImage(bmp, 0, 0);
+  const p = await ocr.probe(bmp, { maxSide: 960 });
+  paint(p.boxes, p.width, p.height, p.hasText); setBadge(p.hasText ? `text found (${p.count})` : 'no readable text — retake?', p.hasText);
+  if (p.hasText) await readAndShow(bmp); else $('out').textContent = 'No readable text detected.';
+};
+</script>
+</body>
+</html>
