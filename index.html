@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>rusto-rs layout results</title>
+<style>
+:root{--bg:#fff;--fg:#1c1c1c;--mut:#666;--bd:#d8d8d8;--acc:#0b6bcb;--reg:#d9480f}
+@media (prefers-color-scheme:dark){:root{--bg:#161616;--fg:#e8e8e8;--mut:#9a9a9a;--bd:#333;--acc:#5aa7ff;--reg:#ff9a62}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,sans-serif}
+header,main{max-width:1200px;margin:0 auto;padding:16px}
+h1{font-size:20px;margin:0 0 4px}p.s{color:var(--mut);margin:0 0 12px}
+.bar{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:12px}
+.bar label{display:flex;gap:6px;align-items:center}select{font:inherit;padding:3px 6px;background:var(--bg);color:var(--fg);border:1px solid var(--bd);border-radius:4px}
+.grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
+@media(max-width:800px){.grid{grid-template-columns:1fr}}
+.pic{position:relative;border:1px solid var(--bd)}.pic img{display:block;width:100%}.pic svg{position:absolute;inset:0;width:100%;height:100%}
+.lines{border:1px solid var(--bd);max-height:80vh;overflow:auto;font:13px/1.35 ui-monospace,Menlo,monospace}
+.l{display:flex;gap:8px;padding:2px 8px;border-bottom:1px solid var(--bd);cursor:default}.l:hover,.l.on{background:color-mix(in srgb,var(--acc) 18%,transparent)}
+.n{color:var(--mut);min-width:3ch;text-align:right}.r{color:var(--reg);min-width:5ch}
+.meta{color:var(--mut);font-size:13px;margin:8px 0}code{background:color-mix(in srgb,var(--mut) 20%,transparent);padding:1px 4px;border-radius:3px}
+</style></head><body>
+<header><h1>rusto-rs: OCR with layout, reading order check</h1>
+<p class="s">Output of the C API on <a href="https://github.com/byrizki/rusto-rs/commit/3a9d94b">rusto-rs 3a9d94b</a> (PP-OCRv6 + <code>layout_cdla.onnx</code>), for <a href="https://github.com/byrizki/rusto-rs/issues/25">#25</a>.
+Lines are numbered in the order the library returned them. Orange boxes are layout regions. Source JSON is in <code>results/</code>; <code>scripts/gen.sh</code> regenerates it.</p>
+<div class="bar">
+<label>Image <select id="img"><option value="yearbook">yearbook (one column)</option><option value="clipping">newspaper clipping (two columns)</option><option value="chronam-ad-page">ChronAm ad page</option></select></label>
+<label>Model <select id="tier"><option>small</option><option>tiny</option></select></label>
+<label>Layout <select id="lay"><option value="">off</option><option value=".layout" selected>on (layout:true)</option></select></label>
+<label><input type="checkbox" id="reg" checked> regions</label><label><input type="checkbox" id="box" checked> line boxes</label>
+</div></header>
+<main><div class="meta" id="meta"></div><div class="grid"><div class="pic" id="pic"></div><div class="lines" id="lines"></div></div></main>
+<script>
+const $=id=>document.getElementById(id), NS='http://www.w3.org/2000/svg';
+const T=['Text','Title','Figure','FigureCaption','Table','TableCaption','Header','Footer','Reference','Equation'];
+async function load(){
+  const name=$('img').value, file=`results/${name}.${$('tier').value}${$('lay').value}.json`;
+  const d=await (await fetch(file)).json();
+  const pic=$('pic');pic.innerHTML='';
+  const im=new Image();im.src=`img/${name}.${name==='chronam-ad-page'?'png':'jpg'}`;pic.append(im);
+  await im.decode();const W=im.naturalWidth,H=im.naturalHeight;
+  const svg=document.createElementNS(NS,'svg');svg.setAttribute('viewBox',`0 0 ${W} ${H}`);pic.append(svg);
+  const mk=(t,a)=>{const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);svg.append(e);return e};
+  const sw=Math.max(1,W/500);
+  if($('reg').checked&&$('lay').value)d.regions.forEach((r,i)=>{const[b0,b1,b2,b3]=r.box;mk('rect',{x:b0,y:b1,width:b2-b0,height:b3-b1,fill:'none',stroke:'#d9480f','stroke-width':sw*2,'stroke-dasharray':`${sw*6} ${sw*3}`});
+    const t=mk('text',{x:b0+4,y:b1+sw*14,fill:'#d9480f','font-size':sw*13,'font-weight':700});t.textContent=`${i}: ${T[r.type]} ${r.conf}`;});
+  const rows=[];$('lines').innerHTML='';
+  d.lines.forEach((l,i)=>{
+    const xs=[l.box[0],l.box[2],l.box[4],l.box[6]],ys=[l.box[1],l.box[3],l.box[5],l.box[7]];
+    const x=Math.min(...xs),y=Math.min(...ys),w=Math.max(...xs)-x,h=Math.max(...ys)-y;
+    let rect=null;if($('box').checked){rect=mk('rect',{x,y,width:w,height:h,fill:'rgba(11,107,203,.12)',stroke:'#0b6bcb','stroke-width':sw});
+      const t=mk('text',{x:x+1,y:y+h*.8,fill:'#0b6bcb','font-size':Math.max(sw*7,Math.min(h,sw*11)),'font-weight':700});t.textContent=i;}
+    const row=document.createElement('div');row.className='l';
+    row.innerHTML=`<span class="n">${i}</span><span class="r">${l.region>=0?'r'+l.region+' '+(T[l.type]||'')[0]:''}</span><span></span>`;
+    row.lastChild.textContent=l.text;
+    const on=v=>{row.classList.toggle('on',v);if(rect)rect.setAttribute('fill',v?'rgba(255,200,0,.5)':'rgba(11,107,203,.12)')};
+    row.onmouseenter=()=>on(true);row.onmouseleave=()=>on(false);$('lines').append(row);});
+  $('meta').textContent=`${d.lines.length} lines, ${d.regions.length} layout region(s) — ${file}`;
+}
+['img','tier','lay','reg','box'].forEach(i=>$(i).onchange=load);load();
+</script></body></html>
